@@ -118,3 +118,36 @@ export interface VideoMetadata {
   hasAudio: boolean;
   audioSampleRate?: number;
 }
+
+export type SubtitleStyle = "simple-white" | "yellow-box" | "gradient" | "semi-black";
+
+export interface HearingAnswers {
+  purpose: VideoPurpose;
+  targetLength: number;          // 秒 (30 | 60 | 180 | 300 | 600)
+  subtitles: {
+    enabled: boolean;
+    style: SubtitleStyle;
+  };
+  narration: boolean;            // Mode A のみ有効
+  effects: {
+    enabled: boolean;
+    types: EffectType[];
+  };
+}
+
+export interface ProductionPlan {
+  mode: VideoMode;
+  purpose: VideoPurpose;
+  targetLength: number;
+  subtitles: {
+    enabled: boolean;
+    style: SubtitleStyle;
+  };
+  narration: boolean;
+  effects: {
+    enabled: boolean;
+    types: EffectType[];
+  };
+  skillSequence: string[];
+  approvalGates: string[];
+}
