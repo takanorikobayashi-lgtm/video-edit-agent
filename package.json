@@ -1,0 +1,35 @@
+{
+  "name": "video-edit-agent",
+  "version": "0.1.0",
+  "description": "画面録画から解説付きチュートリアル動画を自動生成するClaude Codeエージェント",
+  "private": true,
+  "scripts": {
+    "pipeline": "ts-node src/orchestrator.ts",
+    "extract": "ts-node src/orchestrator.ts --step extract",
+    "analyze": "ts-node src/orchestrator.ts --step analyze",
+    "narrate": "ts-node src/orchestrator.ts --step narrate",
+    "render": "ts-node src/orchestrator.ts --step render",
+    "setup:remotion": "ts-node src/setup-remotion.ts",
+    "dry-run": "ts-node src/orchestrator.ts --dry-run",
+    "test": "vitest run",
+    "remotion:preview": "remotion preview remotion/index.ts",
+    "remotion:render": "remotion render remotion/index.ts VideoComposition output/final.mp4"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@google/generative-ai": "^0.24.1",
+    "@remotion/cli": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "dotenv": "^16.4.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
