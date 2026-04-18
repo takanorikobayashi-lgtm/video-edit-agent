@@ -69,7 +69,17 @@ function buildRenderProps(config: PipelineConfig): object {
   };
 }
 
-/** Mode B: ffmpegで元動画に字幕を直接焼き付け */
+/** ffmpegが subtitles フィルター（libass）を持っているか確認 */
+function hasSubtitlesFilter(): boolean {
+  try {
+    const out = execFileSync("ffmpeg", ["-filters"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    return out.includes(" subtitles ");
+  } catch {
+    return false;
+  }
+}
+
+/** Mode B: ffmpegで字幕を焼き付け。libassがなければソフト字幕(mov_text)で代替 */
 async function renderShortVideo(
   config: PipelineConfig,
   inputFile: string,
@@ -81,25 +91,43 @@ async function renderShortVideo(
     throw new Error("subtitles.srt が見つかりません。先に transcribe を実行してください");
   }
 
-  // ffmpeg の subtitles フィルタはコロンをエスケープする必要がある（Windows対応含む）
-  const escapedSrt = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+  if (hasSubtitlesFilter()) {
+    // ── ハード字幕: subtitles フィルターで焼き付け ──
+    // ffmpeg フィルタ文字列内のコロンとカンマをエスケープ
+    const escapedSrt = srtPath.replace(/\\/g, "/").replace(/:/g, "\\:");
+    log("render", `字幕焼き付け（ハード字幕）: ${srtPath}`);
 
-  log("render", `字幕焼き付け開始: ${srtPath}`);
+    execFileSync("ffmpeg", [
+      "-y",
+      "-i", inputFile,
+      "-vf", `subtitles=${escapedSrt}:force_style=FontSize=24\\,PrimaryColour=&H00FFFFFF\\,BorderStyle=3\\,Outline=2\\,Shadow=1\\,MarginV=30`,
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "18",
+      "-c:a", "copy",
+      outputPath,
+    ], { stdio: "inherit" });
 
-  execFileSync("ffmpeg", [
-    "-y",
-    "-i", inputFile,
-    "-vf", `subtitles=${escapedSrt}:force_style='FontSize=24,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=2,Shadow=1,MarginV=30'`,
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "18",
-    "-c:a", "copy",
-    outputPath,
-  ], {
-    stdio: "inherit",
-  });
+    log("render", "ハード字幕焼き付け完了");
+  } else {
+    // ── ソフト字幕: SRTをmov_textトラックとして埋め込み ──
+    log("render", "libassが未対応のため、ソフト字幕（mov_text）で埋め込みます");
+    log("render", "ヒント: brew reinstall ffmpeg でlibassを有効化するとハード字幕が使えます");
 
-  log("render", "ffmpeg 字幕焼き付け完了");
+    execFileSync("ffmpeg", [
+      "-y",
+      "-i", inputFile,
+      "-i", srtPath,
+      "-map", "0",
+      "-map", "1",
+      "-c:v", "copy",
+      "-c:a", "copy",
+      "-c:s", "mov_text",
+      outputPath,
+    ], { stdio: "inherit" });
+
+    log("render", "ソフト字幕埋め込み完了（VLC等で字幕ON推奨）");
+  }
 }
 
 /**
