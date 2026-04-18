@@ -14,22 +14,22 @@ function timestamp(): string {
   return new Date().toISOString().slice(11, 23);
 }
 
-export function log(step: PipelineStep | "system" | "error", message: string): void {
+export function log(step: string, message: string): void {
   const color = COLORS[step] ?? COLORS.system;
-  const label = step.toUpperCase().padEnd(7);
+  const label = step.toUpperCase().slice(0, 10).padEnd(10);
   console.log(`${color}[${timestamp()}] [${label}]${COLORS.reset} ${message}`);
 }
 
-export function logStepStart(step: PipelineStep): void {
+export function logStepStart(step: string): void {
   log(step, `━━━ Starting ${step} ━━━`);
 }
 
-export function logStepDone(step: PipelineStep, durationMs: number): void {
+export function logStepDone(step: string, durationMs: number): void {
   const sec = (durationMs / 1000).toFixed(1);
   log(step, `✓ Completed in ${sec}s`);
 }
 
-export function logError(step: PipelineStep | "system", error: unknown): void {
+export function logError(step: string, error: unknown): void {
   const msg = error instanceof Error ? error.message : String(error);
   log("error", `[${step}] ${msg}`);
 }
