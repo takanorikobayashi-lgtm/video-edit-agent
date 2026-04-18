@@ -1,8 +1,9 @@
 #!/usr/bin/env npx ts-node
 import fs from "fs";
 import path from "path";
+import * as readline from "readline";
 import { config as loadDotenv } from "dotenv";
-import { PipelineConfig, ModeConfig, StepResult } from "./types";
+import { PipelineConfig, ModeConfig, StepResult, HearingAnswers, SubtitleStyle, EffectType, VideoMode } from "./types";
 import { loadConfig } from "./config";
 import { log, logError } from "./logger";
 import { detect } from "./00-detect";
@@ -11,6 +12,7 @@ import { analyze } from "./02-analyze";
 import { transcribe } from "./02b-transcribe";
 import { narrate } from "./03-narrate";
 import { render } from "./04-render";
+import { buildPlan, execute as directorExecute } from "./skills/director";
 
 loadDotenv({ path: path.resolve(__dirname, "..", ".env") });
 
@@ -146,6 +148,66 @@ async function runShortPipeline(
   return results;
 }
 
+async function askCLI(question: string, choices: string[]): Promise<number> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    console.log(`\n${question}`);
+    choices.forEach((c, i) => console.log(`  ${i + 1}. ${c}`));
+    rl.question("番号を入力: ", (answer) => {
+      rl.close();
+      const n = parseInt(answer.trim(), 10);
+      resolve(isNaN(n) ? 1 : Math.min(Math.max(n, 1), choices.length));
+    });
+  });
+}
+
+async function runCLIHearing(mode: VideoMode, videoDurationSec: number): Promise<HearingAnswers> {
+  const purposeChoices = mode === "screen"
+    ? ["操作レクチャー解説", "プレゼン解説", "サービス解説"]
+    : ["TikTok / ショート", "Vlog / 日常", "プロモーション / 商品紹介"];
+  const purposeMap = mode === "screen"
+    ? ["tutorial" as const, "lecture" as const, "tiktok" as const]
+    : ["tiktok" as const, "vlog" as const, "promo" as const];
+  const purposeIdx = await askCLI("動画の目的を選択してください:", purposeChoices) - 1;
+  const purpose = purposeMap[purposeIdx];
+
+  const allLengths = [30, 60, 180, 300, 600];
+  const validLengths = allLengths.filter((l) => l <= videoDurationSec * 0.9);
+  if (validLengths.length === 0) validLengths.push(Math.floor(videoDurationSec * 0.9));
+  const lengthIdx = await askCLI("完成動画の長さ:", validLengths.map((l) => `${l}秒`)) - 1;
+  const targetLength = validLengths[lengthIdx];
+
+  const subAnswer = await askCLI("字幕を追加しますか?", ["はい", "いいえ"]);
+  let subtitleStyle: SubtitleStyle = "simple-white";
+  if (subAnswer === 1) {
+    const styleIdx = await askCLI("字幕スタイル:", ["シンプル白文字", "黄色ボックス", "グラデ背景", "半透明黒帯"]) - 1;
+    const styles: SubtitleStyle[] = ["simple-white", "yellow-box", "gradient", "semi-black"];
+    subtitleStyle = styles[styleIdx];
+  }
+
+  const fxAnswer = await askCLI("エフェクトを追加しますか?", ["はい", "いいえ"]);
+  let effectTypes: EffectType[] = [];
+  if (fxAnswer === 1 && mode === "screen") {
+    const fxIdx = await askCLI("エフェクトの種類:", ["ズームイン", "ズームアウト", "パンレフト", "パンライト"]) - 1;
+    const fxMap: EffectType[] = ["zoomIn", "zoomOut", "panLeft", "panRight"];
+    effectTypes = [fxMap[fxIdx]];
+  }
+
+  let narration = false;
+  if (mode === "screen") {
+    const narAnswer = await askCLI("ナレーション（音声解説）を生成しますか?", ["はい", "いいえ"]);
+    narration = narAnswer === 1;
+  }
+
+  return {
+    purpose,
+    targetLength,
+    subtitles: { enabled: subAnswer === 1, style: subtitleStyle },
+    narration,
+    effects: { enabled: fxAnswer === 1 && mode === "screen", types: effectTypes },
+  };
+}
+
 async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
 
@@ -216,14 +278,10 @@ async function main(): Promise<void> {
       }
     }
   } else {
-    // フルパイプライン
+    // フルパイプライン: detect → CLIヒアリング → director.execute()
     log("system", "フルパイプラインを実行します");
     console.log("");
 
-    clearTmpDir(config.tmpDir);
-    fs.mkdirSync(config.tmpDir, { recursive: true });
-
-    // detect で環境変数チェック
     if (!process.env.GEMINI_API_KEY) {
       log("error", "GEMINI_API_KEY が設定されていません");
       process.exit(1);
@@ -245,11 +303,25 @@ async function main(): Promise<void> {
       log("system", `入力ファイルを detection.json から引き継ぎ: ${config.inputFile}`);
     }
 
-    if (modeConfig.mode === "screen") {
-      results.push(...await runScreenPipeline(config, modeConfig, undefined));
-    } else {
-      results.push(...await runShortPipeline(config, modeConfig, undefined));
-    }
+    // メタデータから動画長を取得（ヒアリングの長さ選択に使う）
+    const metaPath = path.join(config.tmpDir, "metadata.json");
+    const videoDuration = fs.existsSync(metaPath)
+      ? (JSON.parse(fs.readFileSync(metaPath, "utf-8")).duration as number)
+      : 600;
+
+    const hearing = await runCLIHearing(modeConfig.mode, videoDuration);
+    const plan = buildPlan(hearing, modeConfig.mode);
+
+    log("system", `制作プラン: mode=${plan.mode}, purpose=${plan.purpose}, targetLength=${plan.targetLength}s`);
+    log("system", `スキルシーケンス: ${plan.skillSequence.join(" → ")}`);
+    console.log("");
+
+    const skillResults = await directorExecute(plan, config, (skillName, result) => {
+      const icon = result.success ? "✓" : "✗";
+      log("director", `${icon} ${skillName} (${(result.durationMs / 1000).toFixed(1)}s)`);
+      console.log("");
+    });
+    results.push(...skillResults);
   }
 
   // サマリー表示
